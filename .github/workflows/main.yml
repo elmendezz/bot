@@ -1,0 +1,36 @@
+name: Deploy Telegram Bot
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Create token.txt and artista.txt
+        run: |
+          echo "${{ secrets.TELEGRAM_TOKEN }}" > token.txt
+          echo "${{ secrets.ARTIST_NAME }}" > artista.txt
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          ARTIST_NAME: ${{ secrets.ARTIST_NAME }}
+
+      - name: Run bot
+        run: python bot.py
+        
