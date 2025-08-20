@@ -2,7 +2,7 @@ import logging
 import os
 import subprocess
 import time
-import asyncio  # Importar asyncio para funciones asíncronas
+import asyncio
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -12,12 +12,14 @@ from telegram.ext import (
     filters
 )
 from telegram.error import BadRequest
+import re
 
 # --- CONFIGURACIÓN ---
 TOKEN_FILE = 'token.txt'
 ARTIST_FILE = 'artista.txt'
 COVER_IMAGE = 'cover.jpg'
 DOWNLOAD_DIR = os.getcwd()
+MESSAGES_ID_FILE = 'messages_id.txt'
 
 # Estados del modo interactivo
 (
@@ -65,26 +67,62 @@ def get_artist():
         logging.error(f"Error al leer el archivo del artista: {e}")
         return "Artista Desconocido"
 
+def save_message_id_to_file(message_id):
+    """Guarda el ID de un mensaje en el archivo de registro."""
+    try:
+        with open(MESSAGES_ID_FILE, 'a') as f:
+            f.write(str(message_id) + '\n')
+        logging.info(f"ID de mensaje guardado en archivo: {message_id}")
+    except Exception as e:
+        logging.error(f"Error al guardar el ID del mensaje en el archivo: {e}")
+
+def remove_message_id_from_file(message_id):
+    """Elimina el ID de un mensaje del archivo de registro."""
+    try:
+        with open(MESSAGES_ID_FILE, 'r') as f:
+            lines = f.readlines()
+        with open(MESSAGES_ID_FILE, 'w') as f:
+            for line in lines:
+                if line.strip() != str(message_id):
+                    f.write(line)
+        logging.info(f"ID de mensaje eliminado del archivo: {message_id}")
+    except FileNotFoundError:
+        logging.warning("Archivo de IDs no encontrado, no se puede eliminar el ID.")
+    except Exception as e:
+        logging.error(f"Error al eliminar el ID del mensaje del archivo: {e}")
+
+def escape_markdown_v2(text):
+    """Escapa los caracteres especiales para MarkdownV2."""
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
+
 # --- MANEJADORES DE COMANDOS ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /start y envía un mensaje de bienvenida."""
     logging.info(f"Comando /start recibido de {update.effective_user.id}")
-    await update.message.reply_text('¡Hola! Envíame un audio o video y lo convertiré a MP3. Usa /live para empezar un proceso de conversión interactiva o /help para ver los comandos disponibles.')
+    message = "¡Hola! Envíame un audio o video y lo convertiré a MP3. Usa */live* para empezar un proceso de conversión interactiva o */help* para ver los comandos disponibles."
+    await update.message.reply_text(message, parse_mode='MarkdownV2')
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /help y envía una guía de uso."""
     logging.info(f"Comando /help recibido de {update.effective_user.id}")
     help_text = (
-        "**Guía de uso del bot:**\n\n"
-        "1.  **Conversión rápida:** Envía un archivo de audio o video directamente al bot y lo convertirá a MP3 usando el título y artista predeterminados.\n\n"
-        "2.  **Conversión interactiva:** Usa el comando `/live` para activar el modo de edición. El bot te guiará paso a paso para que personalices el título, el artista y la carátula antes de la conversión.\n\n"
-        "3.  **Más comandos:**\n"
+        "*Guía de uso del bot:*\n\n"
+        "1. *Conversión rápida:* Envía un archivo de audio o video directamente al bot y lo convertirá a MP3 usando el título y artista predeterminados.\n\n"
+        "2. *Conversión interactiva:* Usa el comando `/live` para activar el modo de edición. El bot te guiará paso a paso para que personalices el título, el artista y la carátula antes de la conversión.\n\n"
+        "3. *Más comandos:*\n"
         "    - `/start`: Muestra un mensaje de bienvenida.\n"
         "    - `/live`: Inicia un proceso de conversión interactivo.\n"
-        "    - `/help`: Muestra esta guía de uso."
+        "    - `/help`: Muestra esta guía de uso.\n"
+        "    - `/owners`: Muestra el creador del bot."
     )
-    await update.message.reply_text(help_text, parse_mode='Markdown')
+    await update.message.reply_text(help_text, parse_mode='MarkdownV2')
+
+async def owners_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Maneja el comando /owners y muestra el creador del bot."""
+    logging.info(f"Comando /owners recibido de {update.effective_user.id}")
+    await update.message.reply_text("Hecho por elmendezz")
 
 async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Maneja el comando /live para activar el modo interactivo una sola vez."""
@@ -98,10 +136,13 @@ async def live(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_data['live_mode'] = AWAITING_TITLE
     user_data['live_data'] = {
         'requester_id': update.effective_user.id,
-        'messages_to_delete': [update.message.message_id]
+        'messages_to_delete': []
     }
     
-    response = await update.message.reply_text("Modo interactivo activado. Por favor, envía el **título** de la canción.")
+    # Agregar mensaje del usuario a la lista de eliminación
+    user_data['live_data']['messages_to_delete'].append(update.message.message_id)
+
+    response = await update.message.reply_text("Modo interactivo activado. Por favor, envía el *título* de la canción.", parse_mode='MarkdownV2')
     user_data['live_data']['messages_to_delete'].append(response.message_id)
 
     logging.info(f"Modo live activado por {update.effective_user.id}")
@@ -124,7 +165,7 @@ async def handle_live_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data['live_mode'] = AWAITING_ARTIST
         
         response = await update.message.reply_text(
-            f"Título guardado: '{title}'. Ahora, envía el **artista** o escribe 'default' para usar el artista predeterminado."
+            f"Título guardado: *{escape_markdown_v2(title)}*. Ahora, envía el *artista* o escribe 'default' para usar el artista predeterminado.", parse_mode='MarkdownV2'
         )
         user_data['live_data']['messages_to_delete'].append(response.message_id)
         logging.info(f"Título guardado para {update.effective_user.id}: '{title}'")
@@ -139,7 +180,7 @@ async def handle_live_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data['live_mode'] = AWAITING_COVER
         
         response = await update.message.reply_text(
-            f"Artista guardado: '{artist}'. ¿Quieres usar una carátula incrustada? Responde 'si' o 'no'."
+            f"Artista guardado: *{escape_markdown_v2(artist)}*. ¿Quieres usar una carátula incrustada? Responde 'si' o 'no'.", parse_mode='MarkdownV2'
         )
         user_data['live_data']['messages_to_delete'].append(response.message_id)
         logging.info(f"Artista guardado para {update.effective_user.id}: '{artist}'")
@@ -158,7 +199,7 @@ async def handle_live_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         user_data['live_mode'] = LIVE_MODE_OFF
         
-        response = await update.message.reply_text(f"{response_text}\nAhora envía el audio o video para convertirlo.")
+        response = await update.message.reply_text(f"{response_text}\nAhora envía el audio o video para convertirlo.", parse_mode='MarkdownV2')
         user_data['live_data']['messages_to_delete'].append(response.message_id)
         logging.info(f"Preferencia de carátula para {update.effective_user.id}: {user_data['live_data']['use_cover']}")
     else:
@@ -175,6 +216,8 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         file_info = update.message.audio
     elif update.message.video:
         file_info = update.message.video
+    elif update.message.document and update.message.document.mime_type in ['audio/flac', 'audio/x-flac']:
+        file_info = update.message.document
     else:
         return
 
@@ -194,13 +237,19 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE):
     converting_message = await update.message.reply_text("Convirtiendo tu archivo... ⏳")
     
     messages_to_delete = live_data.get('messages_to_delete', [])
-    messages_to_delete.append(update.message.message_id)
+    messages_to_delete.append(update.message.message_id) # Se agrega el mensaje del usuario con el archivo
     
+    # Almacenar IDs en el archivo para su posterior eliminación
+    for msg_id in messages_to_delete:
+        save_message_id_to_file(msg_id)
+    save_message_id_to_file(converting_message.message_id)
+
     try:
         file_obj = await context.bot.get_file(file_info.file_id)
     except BadRequest as e:
         if "File is too big" in str(e):
             await converting_message.edit_text("❌ La conversión falló. El archivo es demasiado grande (límite de 50MB).")
+            remove_message_id_from_file(converting_message.message_id)
             logging.error(f"Error para {update.effective_user.id}: Archivo demasiado grande. Conversión cancelada.")
             return
         else:
@@ -218,6 +267,7 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if use_cover:
             if not os.path.exists(COVER_IMAGE):
                 await update.message.reply_text("Error: No se encontró el archivo de carátula 'cover.jpg'.")
+                remove_message_id_from_file(converting_message.message_id)
                 return
             command.extend(['-i', input_file_path, '-i', COVER_IMAGE])
             command.extend(['-map', '0:a', '-map', '1:v'])
@@ -242,26 +292,30 @@ async def convert_to_mp3(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
         end_time = time.time()
         duration = round(end_time - start_time, 2)
-        final_message = await converting_message.edit_text(f"✅ Conversión exitosa. Duración: {duration} segundos.")
+        # Se aplica la función de escape a la variable 'duration'
+        final_message = await converting_message.edit_text(f"✅ Conversión exitosa. Duración: *{escape_markdown_v2(str(duration))}* segundos.", parse_mode='MarkdownV2')
+        save_message_id_to_file(final_message.message_id)
         logging.info(f"Conversión exitosa y archivo enviado para {update.effective_user.id}")
         
-        await asyncio.sleep(10)  # Esperar 10 segundos de forma asíncrona
-        await context.bot.delete_message(chat_id=final_message.chat_id, message_id=final_message.message_id)
+        await asyncio.sleep(10)
 
+        # Intento de eliminación de mensajes
+        all_messages_to_delete = messages_to_delete + [converting_message.message_id, final_message.message_id]
+        
+        for msg_id in all_messages_to_delete:
+            try:
+                await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
+                remove_message_id_from_file(msg_id)
+                logging.info(f"Mensaje eliminado: {msg_id}")
+            except Exception as e:
+                logging.error(f"Error al eliminar el mensaje {msg_id}: {e}")
+                
     except subprocess.CalledProcessError as e:
-        await converting_message.edit_text(f"❌ La conversión falló. \nDetalles: {e.stderr}")
+        await converting_message.edit_text(f"❌ La conversión falló. \nDetalles: `{escape_markdown_v2(e.stderr)}`", parse_mode='MarkdownV2')
+        remove_message_id_from_file(converting_message.message_id)
         logging.error(f"Error en la conversión para {update.effective_user.id}: {e.stderr}")
     finally:
-        try:
-            for msg_id in messages_to_delete:
-                try:
-                    await context.bot.delete_message(chat_id=update.effective_chat.id, message_id=msg_id)
-                    logging.info(f"Mensaje eliminado: {msg_id}")
-                except Exception as e:
-                    logging.error(f"Error al eliminar el mensaje {msg_id}: {e}")
-        except Exception as e:
-            logging.error(f"Error al intentar eliminar el mensaje de conversión: {e}")
-
+        # Limpieza de archivos temporales
         if os.path.exists(input_file_path):
             os.remove(input_file_path)
             logging.info(f"Archivo temporal eliminado: {input_file_path}")
@@ -278,13 +332,19 @@ def main():
     if not token:
         return
 
-    application = ApplicationBuilder().token(token).build()
+    application = ApplicationBuilder().token(token).read_timeout(30).write_timeout(30).build()
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("live", live))
+    application.add_handler(CommandHandler("owners", owners_command))
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_live_text))
-    application.add_handler(MessageHandler(filters.AUDIO | filters.VIDEO, convert_to_mp3))
+    
+    file_handler = MessageHandler(
+        filters.AUDIO | filters.VIDEO | filters.Document.AUDIO,
+        convert_to_mp3
+    )
+    application.add_handler(file_handler)
 
     application.run_polling()
 
